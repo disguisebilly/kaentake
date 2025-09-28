@@ -2,8 +2,7 @@
 #include "hook.h"
 #include "wvs/gobj.h"
 #include "wvs/msghandler.h"
-#include "ztl/zalloc.h"
-#include "ztl/zcom.h"
+#include "ztl/ztl.h"
 #include <windows.h>
 
 class CCtrlWnd;
@@ -13,6 +12,8 @@ class CWnd : public IGObj, public IUIMsgHandler, public ZRefCounted {
 public:
     MEMBER_AT(IWzGr2DLayerPtr, 0x18, m_pLayer)
     MEMBER_AT(IWzGr2DLayerPtr, 0x20, m_pOverlabLayer)
+    MEMBER_AT(int, 0x24, m_width)
+    MEMBER_AT(int, 0x28, m_height)
 
     virtual void Update() override {}
     virtual int OnDragDrop(int nState, DRAGCTX& ctx, int rx, int ry) { return 0; }

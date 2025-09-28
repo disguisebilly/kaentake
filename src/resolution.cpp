@@ -5,12 +5,8 @@
 #include "wvs/field.h"
 #include "wvs/rtti.h"
 #include "wvs/util.h"
-#include "ztl/zalloc.h"
-#include "ztl/zcoll.h"
-#include "ztl/zcom.h"
-#include "ztl/zstr.h"
 #include "ztl/ztl.h"
-#include "ztl/tsingleton.h"
+
 #include <windows.h>
 #include <strsafe.h>
 
@@ -465,6 +461,23 @@ void CSlideNotice::SetMsg_hook(void* sNotice) {
 }
 
 
+class CUIMiniMap : public CUIWnd, public TSingleton<CUIMiniMap, 0x00BED788> {
+};
+
+int __stdcall CField__ShowMobHPTag_hook1() {
+    if (CUIMiniMap::IsInstantiated() && g_nResolution == 0) {
+        return CUIMiniMap::GetInstance()->m_width;
+    }
+    return 0;
+}
+
+IWzGr2DLayerPtr* __fastcall CField__ShowMobHPTag_hook2(IWzGr2D* pThis, void* _EDX, IWzGr2DLayerPtr* result, int nLeft, int nTop, unsigned int uWidth, unsigned int uHeight, int nZ, const Ztl_variant_t& vCanvas, const Ztl_variant_t& dwFilter) {
+    HRESULT hr = pThis->raw_CreateLayer(nLeft, get_adjust_dy(), uWidth, uHeight, nZ, vCanvas, dwFilter, &result->GetInterfacePtr());
+    if (FAILED(hr)) _com_issue_errorex(hr, pThis, __uuidof(pThis));
+    return result;
+}
+
+
 class CWvsContext : public TSingleton<CWvsContext, 0x00BE7918> {
 public:
     MEMBER_AT(CTemporaryStatView, 0x2EA8, m_temporaryStatView)
@@ -641,10 +654,14 @@ void AttachResolutionMod() {
     Patch4(0x007E16BE + 1, SCREEN_WIDTH_MAX); // CSlideNotice::OnCreate
     Patch4(0x007E1E07 + 2, SCREEN_WIDTH_MAX); // CSlideNotice::SetMsg
 
+    // CField::ShowMobHPTag - boss hp bar position
+    PatchCall(0x00533705, &CField__ShowMobHPTag_hook1, 15); // nLeft
+    PatchCall(0x00533B16, &CField__ShowMobHPTag_hook2); // IWzGr2D::CreateLayer - set layer position
+
     // CScreenShot::SaveFullScreenToJpg
     ATTACH_HOOK(CScreenShot__SaveFullScreenToJpg, CScreenShot__SaveFullScreenToJpg_hook);
 
     // Gr2D_DX9.dll - reimplement window repositioning function as it does not account for multiple monitors
-    CWzGr2D_DX9__RepositionWindow = GetAddressByPattern("GR2D_DX9.DLL", "56 8B F1 8B 86 A8 00 00 00");
+    CWzGr2D_DX9__RepositionWindow = GetAddressByPattern("Gr2D_DX9.dll", "56 8B F1 8B 86 A8 00 00 00");
     ATTACH_HOOK(CWzGr2D_DX9__RepositionWindow, CWzGr2D_DX9__RepositionWindow_hook);
 }
