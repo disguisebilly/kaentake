@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "hook.h"
+#include "constants.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -42,57 +43,16 @@ typedef decltype(&CreateWindowExA) CreateWindowExA_t;
 static CreateWindowExA_t CreateWindowExA_orig = reinterpret_cast<CreateWindowExA_t>(GetAddress("USER32", "CreateWindowExA"));
 static WNDPROC g_WndProc;
 
-LRESULT WndProc_hook(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
-    static POINT ptOffset;
-    static bool bMoving;
-    switch (Msg) {
-    case WM_NCMOUSEMOVE:
-    case WM_MOUSEMOVE:
-        if (bMoving) {
-            if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) {
-                POINT ptCursor;
-                GetCursorPos(&ptCursor);
-                SetWindowPos(hWnd, NULL, ptCursor.x - ptOffset.x, ptCursor.y - ptOffset.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-            } else {
-                bMoving = false;
-                ReleaseCapture();
-            }
+LRESULT WndProc_hook(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_SETCURSOR) {
+        if (LOWORD(lParam) != HTCLIENT) {
+            while (ShowCursor(TRUE) < 0)
+                ;
+            SetCursor(LoadCursor(NULL, IDC_ARROW));
+            return 0;
         }
-        break;
-    case WM_NCLBUTTONDOWN:
-        if (wParam == HTMENU || wParam == HTLEFT) {
-            break;
-        } else if (wParam == HTCAPTION) {
-            RECT rcWnd;
-            POINT ptCursor;
-            GetWindowRect(hWnd, &rcWnd);
-            GetCursorPos(&ptCursor);
-            ptOffset.x = ptCursor.x - rcWnd.left;
-            ptOffset.y = ptCursor.y - rcWnd.top;
-            SetCapture(hWnd);
-            bMoving = true;
-        }
-        return 0;
-    case WM_NCLBUTTONUP:
-    case WM_LBUTTONUP:
-        if (wParam == HTCLOSE) {
-            PostQuitMessage(0);
-        } else if (wParam == HTMINBUTTON && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
-            ShowWindow(hWnd, SW_MINIMIZE);
-        }
-        bMoving = false;
-        ReleaseCapture();
-        break;
-    case WM_NCRBUTTONDOWN:
-    case WM_NCRBUTTONUP:
-        return 0;
-    case WM_RBUTTONUP:
-        if (!bMoving) {
-            break;
-        }
-        return 0;
     }
-    return CallWindowProcA(g_WndProc, hWnd, Msg, wParam, lParam);
+    return CallWindowProcA(g_WndProc, hWnd, msg, wParam, lParam);
 }
 
 HWND WINAPI CreateWindowExA_hook(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam) {
@@ -119,9 +79,9 @@ static WSPPROC_TABLE g_ProcTable;
 static ULONG g_uNexonAddress;
 
 constexpr const char* g_asOriginalAddress[] = {
-        "63.251.217.2",
-        "63.251.217.3",
-        "63.251.217.4",
+    "63.251.217.2",
+    "63.251.217.3",
+    "63.251.217.4",
 };
 
 int WSPAPI WSPConnect_hook(SOCKET s, const struct sockaddr FAR* name, int namelen, LPWSABUF lpCallerData, LPWSABUF lpCalleeData, LPQOS lpSQOS, LPQOS lpGQOS, LPINT lpErrno) {
@@ -132,7 +92,10 @@ int WSPAPI WSPConnect_hook(SOCKET s, const struct sockaddr FAR* name, int namele
             continue;
         }
         g_uNexonAddress = ((sockaddr_in*)name)->sin_addr.S_un.S_addr;
-        InetPtonA(AF_INET, "127.0.0.1", &((sockaddr_in*)name)->sin_addr.S_un.S_addr);
+        InetPtonA(AF_INET, g_sServerHost ? g_sServerHost : CONSTANTS_DEFAULT_HOST, &((sockaddr_in*)name)->sin_addr.S_un.S_addr);
+        if (g_nServerPort) {
+            ((sockaddr_in*)name)->sin_port = htons(static_cast<u_short>(g_nServerPort));
+        }
         break;
     }
     return g_ProcTable.lpWSPConnect(s, name, namelen, lpCallerData, lpCalleeData, lpSQOS, lpGQOS, lpErrno);

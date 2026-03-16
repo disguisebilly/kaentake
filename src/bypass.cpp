@@ -1,8 +1,10 @@
 #include "pch.h"
 #include "hook.h"
 #include "wvs/wvsapp.h"
+#include "wvs/wndman.h"
 #include "wvs/stage.h"
 #include "wvs/packet.h"
+#include "wvs/exception.h"
 #include "wvs/util.h"
 #include "ztl/ztl.h"
 
@@ -40,7 +42,7 @@ public:
     void Socket(int type, int af, int protocol) {
         _m_hSocket = socket(af, type, protocol);
         if (_m_hSocket == INVALID_SOCKET) {
-            throw WSAGetLastError();
+            throw ZException(WSAGetLastError());
         }
     }
 };
@@ -283,10 +285,14 @@ void CWvsApp::Run_hook(int* pbTerminate) {
                     HRESULT hr = m_hrZExceptionCode;
                     m_hrComErrorCode = S_OK;
                     m_hrZExceptionCode = S_OK;
-                    struct {
-                        HRESULT m_hr;
-                    } exception = {hr};
-                    throw exception;
+                    if (hr == 0x20000000) {
+                        throw CPatchException(m_nTargetVersion);
+                    } else if (hr >= 0x21000000 && hr <= 0x21000006) {
+                        throw CDisconnectException(hr);
+                    } else if (hr >= 0x22000000 && hr <= 0x2200000E) {
+                        throw CTerminateException(hr);
+                    }
+                    throw ZException(hr);
                 }
             } while (!*pbTerminate && msg.message != WM_QUIT);
         } else {
@@ -356,6 +362,71 @@ int CLogin::SendCheckPasswordPacket_hook(char* sID, char* sPasswd) {
 }
 
 
+int CWndMan::TranslateMessage_hook(UINT& msg, WPARAM& wParam, LPARAM& lParam, LRESULT* plResult) {
+    if (msg == WM_MOUSEWHEEL) {
+        // CWndMan::ProcessMouse(this, msg, wParam, lParam);
+        *plResult = reinterpret_cast<LRESULT(__thiscall*)(CWndMan*, UINT, WPARAM, LPARAM)>(0x009E3AE6)(this, msg, wParam, lParam);
+        return 0;
+    }
+    return CWndMan::TranslateMessage(this, msg, wParam, lParam, plResult);
+}
+
+LRESULT __stdcall PreventWindowFreeze(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    static POINT ptOffset;
+    static bool bMoving;
+    switch (msg) {
+    case WM_NCMOUSEMOVE:
+    case WM_MOUSEMOVE: {
+        if (bMoving) {
+            if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) {
+                POINT ptCursor;
+                GetCursorPos(&ptCursor);
+                SetWindowPos(hWnd, NULL, ptCursor.x - ptOffset.x, ptCursor.y - ptOffset.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+            } else {
+                bMoving = false;
+                ReleaseCapture();
+            }
+        }
+        break;
+    }
+    case WM_NCLBUTTONDOWN: {
+        if (SendMessageA(hWnd, WM_NCHITTEST, wParam, lParam) == HTCAPTION) {
+            RECT rcWnd;
+            POINT ptCursor;
+            GetWindowRect(hWnd, &rcWnd);
+            GetCursorPos(&ptCursor);
+            ptOffset.x = ptCursor.x - rcWnd.left;
+            ptOffset.y = ptCursor.y - rcWnd.top;
+            SetCapture(hWnd);
+            bMoving = true;
+        }
+        return 0;
+    }
+    case WM_NCLBUTTONUP:
+    case WM_LBUTTONUP: {
+        LRESULT ht = SendMessageA(hWnd, WM_NCHITTEST, wParam, lParam);
+        if (ht == HTMINBUTTON) {
+            ShowWindow(hWnd, SW_MINIMIZE);
+        } else if (ht == HTCLOSE) {
+            PostQuitMessage(0);
+        }
+        bMoving = false;
+        ReleaseCapture();
+        break;
+    }
+    case WM_NCRBUTTONDOWN:
+    case WM_NCRBUTTONUP:
+        return 0;
+    case WM_RBUTTONUP:
+        if (bMoving) {
+            return 0;
+        }
+        break;
+    }
+    return DefWindowProcA(hWnd, msg, wParam, lParam);
+}
+
+
 void AttachClientBypass() {
     ATTACH_HOOK(CClientSocket::Connect, CClientSocket::Connect_hook);
     ATTACH_HOOK(CWvsApp::Constructor, CWvsApp::Constructor_hook);
@@ -363,8 +434,12 @@ void AttachClientBypass() {
     ATTACH_HOOK(CWvsApp::Run, CWvsApp::Run_hook);
     ATTACH_HOOK(CLogin::SendCheckPasswordPacket, CLogin::SendCheckPasswordPacket_hook);
 
+    ATTACH_HOOK(CWndMan::TranslateMessage, CWndMan::TranslateMessage_hook);
+    PatchCall(0x009FEBAF, &PreventWindowFreeze, 6); // CWvsApp::WindowProc - fix titlebar freeze
+
     PatchRetZero(0x009FEC62); // CWvsApp::EnableWinKey
     PatchRetZero(0x009F18C9); // ShowStartUpWndModal
     PatchRetZero(0x00422C7E); // ShowAdBalloon
     PatchRetZero(0x009F191B); // SendHSLog
+    Patch1(0x00797074, 0xEB); // ZExceptionHandler::UnhandledExceptionFilter
 }
